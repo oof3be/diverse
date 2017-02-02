@@ -1,0 +1,33 @@
+#!/bin/ksh
+# --------------------------------------------------------------------
+# Script:      check_fc_settings
+# Version:     1.00
+# Date:        01.04.2009
+# No Warranty
+# --------------------------------------------------------------------
+
+# --------------------------------------------------------------------
+# Main function
+# --------------------------------------------------------------------
+main()
+{
+  print "#adapter:protocol:wwpn:diskusag:tapeusage:dyntrk:fc_err_recov"
+
+  for adapter in $(lsdev -Cc adapter -F name | grep fcs ); do
+    wwpn=$(lscfg -vl ${adapter} | awk '/Network Address/')
+    wwpn=${wwpn##*.}
+    protdev=$(echo ${adapter}| sed 's/fcs/fscsi/')
+    usedfordisk=$(lspath | grep ${protdev})
+    usedfortape=$(lsdev -Cc tape -p ${protdev})
+    [[ ${usedfordisk} != "" ]] && usedfordisk=yes || usedfordisk=no
+    [[ ${usedfortape} != "" ]] && usedfortape=yes || usedfortape=no
+
+    dyntrk=$(      lsattr -El ${protdev} -a dyntrk       | awk '{print $2}')
+    fc_err_recov=$(lsattr -El ${protdev} -a fc_err_recov | awk '{print $2}')
+    
+    print ${adapter}:${protdev}:${wwpn}:${usedfordisk}:${usedfortape}:${dyntrk}:${fc_err_recov}
+  done
+}
+# --------------------------------------------------------------------
+main $*
+# --------------------------------------------------------------------

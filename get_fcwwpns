@@ -1,0 +1,31 @@
+#!/bin/ksh
+# --------------------------------------------------------------------
+# Script:      get_fcwwpns
+# Version:     1.00
+# Date:        01.04.2009
+# No Warranty
+# --------------------------------------------------------------------
+
+# --------------------------------------------------------------------
+# Main function
+# --------------------------------------------------------------------
+main()
+{
+  format="%10s%10s%18s%10s%10s\n"
+  printf "${format}" adapter protocol wwpn diskusage tapeusage
+
+  for adapter in $(lsdev -Cc adapter -F name | grep fcs ); do
+    wwpn=$(lscfg -vl ${adapter} | awk '/Network Address/')
+    wwpn=${wwpn##*.}
+    protdev=$(echo ${adapter}| sed 's/fcs/fscsi/')
+    usedfordisk=$(lspath | grep ${protdev})
+    usedfortape=$(lsdev -Cc tape -p ${protdev})
+    [[ ${usedfordisk} != "" ]] && usedfordisk=yes || usedfordisk=no
+    [[ ${usedfortape} != "" ]] && usedfortape=yes || usedfortape=no
+    
+    printf "${format}" ${adapter} ${protdev} ${wwpn} ${usedfordisk} ${usedfortape}
+  done
+}
+# --------------------------------------------------------------------
+main $*
+# --------------------------------------------------------------------

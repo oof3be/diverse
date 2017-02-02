@@ -1,0 +1,226 @@
+#!/bin/ksh
+# --------------------------------------------------------------------
+# Script:      get_disks
+# Version:     1.03
+# Date:        13.04.2010
+# No Warranty
+# --------------------------------------------------------------------
+
+CSVOUT=${HOME}/get_disks_$(hostname -s).csv
+LSMAPFILE=${HOME}/ls_mapping_$(hostname -s).csv
+
+[[ -f ${CSVOUT} ]] && rm ${CSVOUT}
+
+DEVCUT2105="15-21"
+DEVCUT2145="16-22"
+LUNCUT2145="35-37"
+DEVCUT2107="4-10"
+LUNCUT2107="13-15"
+DEVCUTVSCSI2145="20-26"
+LUNCUTVSCSI2145="39-41"
+DEVCUTVSCSI2107="8-14"
+LUNCUTVSCSI2107="17-19"
+
+USER=$(whoami)
+if [[ ${USER} != "root" ]];then
+ echo "Script must be run as superuser root. Exiting ..."
+ exit 1
+fi
+# --------------------------------------------------------------------
+# Main function
+# --------------------------------------------------------------------
+main()
+{
+
+  [[ -f /usr/ios/cli/ioscli ]] && VIOMODE=yes
+
+  get_options $*
+
+  format="%10s%8s%16s%16s%10s%20s%20s%12s%12s%12s%15s\n"
+
+  if [[  ${VIOMODE} = "yes" ]];then
+
+    /nim/tools/helpers/ls_mapping
+    if [[ ${SHOWPHYSLOC:-"true"} = "true" ]]; then
+      print "disk;vhost;vtd;type;lun;device;pvid;size;free;used;vg"         >${CSVOUT}
+    else
+      print "disk;vhost;vtd;type;lun;device;pvid;size;free;used;vg;physloc" >${CSVOUT}
+    fi
+
+    printf "${format}" disk vhost vtd type lun  device  pvid  size  free  used  vg
+
+  else
+
+    if [[ ${SHOWPHYSLOC:-"true"} = "true" ]]; then
+      print "disk;path1;path2;type;lun;device;pvid;size;free;used;vg"         >${CSVOUT}
+    else
+      print "disk;path1;path2;type;lun;device;pvid;size;free;used;vg;physloc" >${CSVOUT}
+    fi
+
+    printf "${format}" disk path1 path2 type lun  device  pvid  size  free  used  vg
+
+  fi
+
+  for disk in $(lspv | awk '/'${search}'/{print $1}'); do
+
+    vhost=""
+    vtd=""
+
+    IsActiveDisk=$(lspv | awk '/^'${disk}' /{print $4}')
+    create_data ${disk}
+    if [[ ${IsActiveDisk} != "" ]]; then
+      free=$(lspv ${disk} | awk '/FREE PPs:/{print $4}')
+      used=$(lspv ${disk} | awk '/USED PPs:/{print $4}')
+    else
+      free="NonActive"
+      used="NonActive"
+    fi
+
+    vg=$(lspv | awk '/^'${disk}' /{print $3}')
+    free=${free##*\(}
+    used=${used##*\(}
+
+    if [[ ${VIOMODE} = "yes" ]]; then
+      [[ ! -f ${LSMAPFILE} ]] && touch ${LSMAPFILE}
+      mapping=$(awk -F";" '/;'${disk}';/{print $1":"$3}' ${LSMAPFILE})
+      ismapping=${mapping:-"unmapped"}
+      vhost=${mapping%:*}
+      vtd=${mapping##*:}
+    fi
+
+    vhost=${vhost:-${parent1}}
+    vtd=${vtd:-${parent2}}
+
+    printf "${format}" "${disk}" "${vhost}" "${vtd}" "${dtype}" "${serial}" "${device}" "${pvid}" "${size}" "${free}" "${used}" "${vg}"
+    if [[ ${SHOWPHYSLOC:-"true"} = "true" ]]; then
+      print  "${disk};${vhost};${vtd};${dtype};${serial};${device};${pvid};${size};${free};${used};${vg}"            >>${CSVOUT}
+    else
+      print  "${disk};${vhost};${vtd};${dtype};${serial};${device};${pvid};${size};${free};${used};${vg};${physloc}" >>${CSVOUT}
+    fi
+  done
+}
+# --------------------------------------------------------------------
+# Get the options
+# --------------------------------------------------------------------
+get_options()
+{
+  while getopts :v:pxsn  OPTION
+   do
+     case $OPTION in
+       p)    SHOWPHYSLOC="false"          ;;
+       s)    VIOMODE="no"                 ;;
+       x)    LUNWIDE4=yes
+             LUNCUT2107="12-15"
+             LUNCUT2145="34-37"
+             LUNCUTVSCSI2145="38-41"
+             LUNCUTVSCSI2107="16-19"
+             ;;
+       v)    search=${search}${OPTARG}    ;;
+       n)    search="${search}||\/none\/" ;;
+     esac
+   done
+   shift $(($OPTIND - 1))
+}
+# --------------------------------------------------------------------
+# Create the data
+# --------------------------------------------------------------------
+create_data()
+{
+  local disk=$1
+  # ------------
+  # Get uniqueid
+  # ------------
+  uniqueid=$(odmget -q "name like ${disk} and attribute = unique_id" CuAt | grep value)
+  uniqueid=$(echo ${uniqueid##*=} | sed 's/"//g')
+  serial=$(lscfg -vl ${disk} | awk '/Serial Number/')
+  serial=${serial##*.}
+  physloc=$(lscfg -vl ${disk} | awk '/'${disk}'/{print $2}')
+  size=$(bootinfo -s ${disk})
+  pvid=$(lspv | awk '/^'${disk}' /{print $2}')
+  parents=$(lspath -l ${disk} -F parent | sort -u |xargs)
+  parent1=$(echo ${parents} | awk '{print $1}')
+  parent2=$(echo ${parents} | awk '{print $2}')
+  parent1=${parent1:-"---"}
+  parent2=${parent2:-"---"}
+ 
+  # ------------------------------------------------
+  # if no serial number, check whether it is a vscsi
+  # ------------------------------------------------
+
+  if [[ ${serial} = "" ]]; then
+    isvscsi=$(echo ${uniqueid} | grep vscsi)
+    [[ ${isvscsi} != "" ]] && dtype=vscsi
+  else
+    dtype=$(lscfg -vl ${disk} | awk '/Type and Model/')
+    dtype=${dtype##*.}
+    dtype=$(echo $dtype | sed 's/ //g')
+  fi
+
+  case ${dtype} in
+
+    2145)    device=$(echo ${uniqueid} | cut -c ${DEVCUT2145})
+             serial=$(echo ${uniqueid} | cut -c ${LUNCUT2145})
+             ;;
+    2107)    device=$(echo ${uniqueid} | cut -c ${DEVCUT2107})
+             serial=$(echo ${uniqueid} | cut -c ${LUNCUT2107})
+             ;;
+    2107900) device=$(echo ${uniqueid} | cut -c ${DEVCUT2107})
+             serial=$(echo ${uniqueid} | cut -c ${LUNCUT2107})
+             dtype=2107
+             ;;
+    2105)    device=$(echo ${uniqueid} | cut -c ${DEVCUT2105})
+             ;;
+            
+    vscsi)   # ------------------------------------------------ 
+             # If vscsi, it may be an 2145 or 2107 device
+             # ------------------------------------------------ 
+             myuniqueid=$(echo ${uniqueid%IBM*})
+             typeset -i myuniqueidlength=$(echo ${myuniqueid} | wc -c)
+             case ${myuniqueidlength} in
+               50) dtype="2145"
+                   c1=$(echo ${myuniqueidlength}-6|bc)
+                   c2="${c1}-${myuniqueidlength}"
+                   tocut=$(echo ${c2} | sed 's/ //g')
+                   mydtype=$(echo ${myuniqueid} | cut -c ${tocut} | cut -c1-4)
+                   if [[ ${mydtype} = ${dtype} ]]; then
+                     dtype="vscsi[2145]"
+                     device=$(echo ${myuniqueid} | cut -c ${DEVCUTVSCSI2145})
+                     serial=$(echo ${myuniqueid} | cut -c ${LUNCUTVSCSI2145})
+                   else
+                     dtype="vscsi[${mydtype}]"
+                     device=${myuniqueid}
+                     serial=UNKNOWN
+                   fi
+                   ;;
+
+               31) dtype="2107"
+                   c1=$(echo ${myuniqueidlength}-9|bc)
+                   c2="${c1}-${myuniqueidlength}"
+                   tocut=$(echo ${c2} | sed 's/ //g')
+                   mydtype=$(echo ${myuniqueid} | cut -c ${tocut} | cut -c1-4)
+                   if [[ ${mydtype} = ${dtype} ]]; then
+                     dtype="vscsi[2107]"
+                     device=$(echo ${myuniqueid} | cut -c ${DEVCUTVSCSI2107})
+                     serial=$(echo ${myuniqueid} | cut -c ${LUNCUTVSCSI2107})
+                   else
+                     dtype="vscsi[${mydtype}]"
+                     device=${myuniqueid}
+                     serial=UNKNOWN
+                   fi
+                   ;;
+
+                *) device="${myuniqueid}[${myuniqueidlength}]"
+                   serial="${myuniqueid}[${myuniqueidlength}]"
+
+                   ;;
+
+             esac           
+             ;;
+
+    *)       device="SCSI";;
+
+  esac
+}
+# --------------------------------------------------------------------
+main $*
+# --------------------------------------------------------------------
