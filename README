@@ -5,3 +5,4 @@ get_fcwwpns		AIX get FC WWNS
 check_fc_settings	AIX check Fibre channel settings
 get_disks		AIX get disks
 cpuinfo.c		CPU Info
+connect.c		Make socket connection using SOCKS4/5 and HTTP tunnel
